@@ -167,9 +167,10 @@ def calculate_3d_bboxes_in_image(f_rgb: Path, f_info: Path, f_segments: Path, ca
 
     # Read the camera extrinsics from the info.json
     cam_extr = np.array(info["camera_transform"]).reshape((4, 4)).T
-    print('\ncam_extr\n', cam_extr)
+    print('\ncam_extr:\n', cam_extr)
     cam_rot = cam_extr[:3, :3]
-    print('cam_rot: ', R.from_matrix(cam_rot).as_euler('xyz', degrees=True))
+    print('cam rotation (xyz, degrees): ', R.from_matrix(cam_rot).as_euler('xyz', degrees=True))
+    print(f'cam translation (xyz, meters): ', cam_extr[:3, 3].T)
 
     # Get list of all objects and their pose from info.json
     list_objs = info["objects"]
@@ -181,6 +182,7 @@ def calculate_3d_bboxes_in_image(f_rgb: Path, f_info: Path, f_segments: Path, ca
 
     # Get the rotated bbox for each obj in image
     obj_bboxes = dict()
+    world_aligned_bbox = dict()  # This min/max corners of world-aligned bbox of each object is present in json
     list_objs.reverse()  # Invert list so that last object (ones on top) come first
     for obj_info in list_objs:
         # Construct 4x4 transformation matrix of each object from it's position and orientation
@@ -199,6 +201,11 @@ def calculate_3d_bboxes_in_image(f_rgb: Path, f_info: Path, f_segments: Path, ca
         # Collect in list
         obj_id = obj_info["id"]
         obj_bboxes[obj_id] = obj_bbox_world
+
+        world_aligned_bbox[obj_id] = {
+            "bbox_min": obj_info["bbox_min"],
+            "bbox_max": obj_info["bbox_max"],
+        }
 
         # TEST: SELECT PARTICULAR OBJ
         if TEST_OBJ_ID is not None and obj_id == TEST_OBJ_ID:
@@ -223,25 +230,28 @@ def calculate_3d_bboxes_in_image(f_rgb: Path, f_info: Path, f_segments: Path, ca
         else:
             obj_mask = obj_mask.astype(np.bool)
 
+        # Get the world axis-aligned bbox (to compare and see we're getting sensible values)
+        print(f'Obj-{obj_id} Bbox world coords (after applying transformation to sku bbox):\n', bbox_3d.T)
+        w_aligned_bbox_min = world_aligned_bbox[obj_id]["bbox_min"]
+        w_aligned_bbox_max = world_aligned_bbox[obj_id]["bbox_max"]
+        print(f'Obj-{obj_id} World Aligned Bbox:\n  Min: {w_aligned_bbox_min}\n  Max: {w_aligned_bbox_max}')
+
         # Convert from world coords to camera coords
-        # bbox_3d = np.concatenate((bbox_3d, np.ones((8, 1))), axis=1)  # Shape: [8, 4], add homogenous coord
-        print(f'Obj-{obj_id} Bbox world coords:\n', bbox_3d.T)
         bbox3d_cam_coords = cam_extr @ bbox_3d  # Shape: [4, 8]
         bbox3d_cam_coords = bbox3d_cam_coords[:3, :]  # Shape: [3, 8]
+        print(f'Obj-{obj_id} Bbox cam coords (X-right, Y-Up):\n', bbox3d_cam_coords.T)
 
-        # Rotation to convert camera from Y-up, X-right to Y-down, X-right system
-        print(f'Obj-{obj_id} Bbox blender cam coords:\n', bbox3d_cam_coords.T)
+        # Rotation to convert (Y-up, X-right) camera to (Y-down, X-right) camera system for direct projection to pixels
         rot_x_180 = np.array([[1, 0, 0], [0, -1, 0], [0, 0, -1]])
         bbox3d_cam_coords = rot_x_180 @ bbox3d_cam_coords
+        print(f'Obj-{obj_id} Bbox rotated cam coords (X-right, Y-Down):\n', bbox3d_cam_coords.T)
 
         # Project to pixels
-        print(f'Obj-{obj_id} Bbox cv cam coords:\n', bbox3d_cam_coords.T)
         bbox_px = cam_intr @ bbox3d_cam_coords
         bbox_px = bbox_px.T  # Shape: [8, 3]
         bbox_px = bbox_px / bbox_px[:, 2, np.newaxis]  # Normalize
         bbox_px = bbox_px[:, :2]
         print(f'Obj-{obj_id} Bbox pixel coords:\n', bbox_px)
-        print('obj_id: ', obj_id)
 
         # Generate random color
         rand_col = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
@@ -300,7 +310,7 @@ def main(cfg: DictConfig):
                                            CAM_DATA["focal_len_mm"], CAM_DATA["field_of_view"]["x_axis_rads"],
                                            CAM_DATA["field_of_view"]["y_axis_rads"])
 
-    print('cam_intr\n', cam_intr)
+    print('cam_intr:\n', cam_intr)
 
     calculate_3d_bboxes_in_image(files_rgb[0], files_info[0], files_segments[0], cam_intr, sku_ids)
 
