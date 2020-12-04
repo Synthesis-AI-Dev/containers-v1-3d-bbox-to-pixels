@@ -5,6 +5,11 @@ There are 3 unique SKUs. Their bounding box at zero rotation/translation is hard
 Based on the pose of each object in the info file, we calculate the 3d bounding box of
 each object, then project them to pixels.
 
+There is information about the renders in the info.json and metadata.jsonl files.
+However, some information is missing. This data is hard-coded within the script:
+1. The bounding box of each SKU at zero rotation/translation
+2. Camera information (sensor size, field of view) 
+
 10 Sample images are included in the repo.
 
 ![](sample_data/0.rgb.png)

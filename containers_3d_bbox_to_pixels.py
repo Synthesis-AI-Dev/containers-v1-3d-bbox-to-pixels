@@ -12,14 +12,13 @@ import hydra
 from omegaconf import OmegaConf, DictConfig
 
 
-# dir_data = Path('/media/shrek/work/synthesis-ai/sample_data/proctor_gamble_data/pg-3k-3dbbox-subset10')
 EXT_INFO = '.info.json'
 EXT_RGB = '.rgb.png'
 EXT_SEGMENTS = '.segments.png'
 EXT_VIZ_BBOX = '.bbox.png'
 FNAME_METADATA = 'metadata.jsonl'
 SEED = 0
-TEST_OBJ_ID = 192  # Will only process this one obj in image, for debugging purposes. Obj 192 for renderid 0 is on top of pile.
+TEST_OBJ_ID = 192  # If not none, will only process this one obj in image, for debugging purposes. Obj 192 for renderid 0 is on top of pile.
 
 
 # Data about the camera. Some of it is hardcoded and not available in metadata file
