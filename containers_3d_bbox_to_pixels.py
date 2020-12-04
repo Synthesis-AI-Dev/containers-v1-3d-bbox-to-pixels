@@ -44,6 +44,7 @@ CAM_DATA = {
 }
 
 
+# These are the 3D bounding boxes of each SKU, at zero rotation/translation
 BBOX_SKU_1 = np.array(
     [[-0.0303775,	-0.013597,	-0.014708],
      [0.0303775,	-0.013597,	-0.014708],
@@ -256,9 +257,11 @@ def calculate_3d_bboxes_in_image(f_rgb: Path, f_info: Path, f_segments: Path, ca
         fname = f_rgb.parent / (render_id_rgb + EXT_VIZ_BBOX)
         print(fname)
         cv2.imwrite(str(fname), rgb)
+        print(f'\nSaved output image {fname}')
 
         if TEST_OBJ_ID is not None:
             # If testing enabled for single object, then quit after processing that obj
+            print('Test mode - quitting')
             break
 
 
