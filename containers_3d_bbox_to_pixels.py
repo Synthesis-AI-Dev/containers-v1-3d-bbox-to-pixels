@@ -18,8 +18,8 @@ EXT_SEGMENTS = '.segments.png'
 EXT_VIZ_BBOX = '.bbox.png'
 FNAME_METADATA = 'metadata.jsonl'
 SEED = 0
-TEST_OBJ_ID = 192  # If not none, will only process this one obj in image, for debugging purposes. Obj 192 for renderid 0 is on top of pile.
-
+TEST_OBJ_ID = None #192  # If not none, will only process this one obj in image, for debugging purposes. Obj 192 for renderid 0 is on top of pile.
+THRESHOLD_MIN_PX_VISIBLE_OBJECT = 1000  # The minimum number of pixels in a mask for the object to be considered "visible"
 
 # Data about the camera. Some of it is hardcoded and not available in metadata file
 CAM_DATA = {
@@ -38,8 +38,8 @@ CAM_DATA = {
 
     # These are unknown and must be calculated
     "field_of_view": {
-        "y_axis_rads": 1.8260405563703,  # fov = 2 * atan((sensor_size/2) / focal_len)
-        "x_axis_rads": 1.8260405563703   # fov = 2 * atan((sensor_size/2) / focal_len)
+        "y_axis_rads": 1.148821887,  # fov = 2 * atan((sensor_size/2) / focal_len)
+        "x_axis_rads": 1.148821887   # fov = 2 * atan((sensor_size/2) / focal_len)
     },
 }
 
@@ -134,6 +134,68 @@ def construct_camera_intrinsics(res_x: int, res_y: int, focal_len_mm: float, fov
     return intr
 
 
+def invert_4x4_transform(mat_transform: np.ndarray) -> np.ndarray:
+    """Invert the transform defined by a 4x4 transformation matrix
+
+    If the transform Tx is,
+        Tx = [R | t], where R is rotation component and t is translation component
+
+    Tx_inv is given by:
+        Tx_inv = [R_inv | -1 * R_inv @ t]
+    """
+    if mat_transform.shape != (4, 4):
+        raise ValueError(f"The transform matrix must be of shape [4, 4]. Given: {mat_transform.shape}")
+
+    tx = mat_transform
+    rx = tx[:3, :3]  # Rotation
+    t = tx[:3, 3]  # Translation
+
+    rx_inv = np.linalg.inv(rx)
+    t_inv = -1 * (rx_inv @ t)
+
+    tx_inv = np.eye(4, dtype=np.float32)
+    tx_inv[:3, :3] = rx_inv
+    tx_inv[:3, 3] = t_inv
+
+    return tx_inv
+
+
+def draw_3d_bbox(img: np.ndarray, bbox_px: np.ndarray, color: List) -> None:
+    """Draw the 3D bbox on an RGB image, given the 8 corners in pixel coords
+
+    Args:
+        img (numpy.ndarray): BGR image.
+        bbox_px (numpy.ndarray): Pixel coords of 8 corners of 3d bbox. Shape [8, 2]
+                              The order of the points can be seen in the BBOX_SKU_1 variables
+        color (list[intt]): Length = 3, defines the color in BGR. Each value is in range 0-255.
+    """
+    # Draw the corners of the bbox
+    for pt_px in bbox_px:
+        img = cv2.circle(img, tuple(pt_px), 1, color, -1)
+
+    # Draw the lines between the corners
+    def draw_line_bw_points(img, bbox, col, idx1, idx2):
+        image = cv2.line(img, tuple(bbox[idx1]), tuple(bbox[idx2]), col, 1)
+        return image
+
+    img = draw_line_bw_points(img, bbox_px, color, 0, 1)
+    img = draw_line_bw_points(img, bbox_px, color, 1, 2)
+    img = draw_line_bw_points(img, bbox_px, color, 2, 3)
+    img = draw_line_bw_points(img, bbox_px, color, 3, 0)
+
+    img = draw_line_bw_points(img, bbox_px, color, 4, 5)
+    img = draw_line_bw_points(img, bbox_px, color, 5, 6)
+    img = draw_line_bw_points(img, bbox_px, color, 6, 7)
+    img = draw_line_bw_points(img, bbox_px, color, 7, 4)
+
+    img = draw_line_bw_points(img, bbox_px, color, 0, 4)
+    img = draw_line_bw_points(img, bbox_px, color, 1, 5)
+    img = draw_line_bw_points(img, bbox_px, color, 2, 6)
+    img = draw_line_bw_points(img, bbox_px, color, 3, 7)
+
+    return img
+
+
 def get_sku_bbox_corners(sku_id: int):
     """Get the 8 corners of the 3D bounding box encompassing a given SKU at default pose.
     There are 3 SKU IDs and their 3D BBOX values at default pose are hard-coded"""
@@ -167,6 +229,9 @@ def calculate_3d_bboxes_in_image(f_rgb: Path, f_info: Path, f_segments: Path, ca
 
     # Read the camera extrinsics from the info.json
     cam_extr = np.array(info["camera_transform"]).reshape((4, 4)).T
+    # TEST - invert cam transform
+    cam_extr = invert_4x4_transform(cam_extr)
+
     print('\ncam_extr:\n', cam_extr)
     cam_rot = cam_extr[:3, :3]
     print('cam rotation (xyz, degrees): ', R.from_matrix(cam_rot).as_euler('xyz', degrees=True))
@@ -224,7 +289,8 @@ def calculate_3d_bboxes_in_image(f_rgb: Path, f_info: Path, f_segments: Path, ca
         # Skip if object is not visible
         obj_mask = (segments == obj_id).astype(np.uint8)  # Get mask of obj
         obj_mask = cv2.erode(obj_mask, np.ones((3, 3), np.uint8), iterations=1)  # Remove noise in mask
-        if np.count_nonzero(obj_mask) == 0:
+        obj_mask = cv2.dilate(obj_mask, np.ones((3, 3), np.uint8), iterations=1)  # Restore size of obj's mask
+        if np.count_nonzero(obj_mask) < THRESHOLD_MIN_PX_VISIBLE_OBJECT:
             # If mask is empty, skip this object
             continue
         else:
@@ -251,17 +317,22 @@ def calculate_3d_bboxes_in_image(f_rgb: Path, f_info: Path, f_segments: Path, ca
         bbox_px = bbox_px.T  # Shape: [8, 3]
         bbox_px = bbox_px / bbox_px[:, 2, np.newaxis]  # Normalize
         bbox_px = bbox_px[:, :2]
+        bbox_px = bbox_px.round().astype(np.int)
         print(f'Obj-{obj_id} Bbox pixel coords:\n', bbox_px)
 
         # Generate random color
-        rand_col = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
-
-        # Draw points on image
-        for pt_px in bbox_px:
-            rgb = cv2.circle(rgb, tuple(pt_px.round().astype(np.int)), 2, rand_col, 1)
+        rand_col = [random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)]
 
         # Colorize the mask
-        rgb[obj_mask] = rand_col
+        rand_col_muted = np.array([col / 3 for col in rand_col], dtype=np.uint16)
+        rgb = rgb.astype(np.uint16)  # Cast to 16bit to prevent overflow
+        rgb[obj_mask] += rand_col_muted
+        rgb = rgb.clip(min=0, max=255).astype(np.uint8)
+
+        # Draw points on image
+        # for pt_px in bbox_px:
+        #     rgb = cv2.circle(rgb, tuple(pt_px), 1, rand_col, -1)
+        draw_3d_bbox(rgb, bbox_px, rand_col)
 
         # Save output image
         fname = f_rgb.parent / (render_id_rgb + EXT_VIZ_BBOX)
