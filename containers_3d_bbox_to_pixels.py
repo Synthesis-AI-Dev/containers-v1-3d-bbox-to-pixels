@@ -1,15 +1,16 @@
-import jsonlines
-from pathlib import Path
-from typing import List, Union
-import numpy as np
+import logging
 import math
-import cv2
-import json
-from typing import Dict
-from scipy.spatial.transform import Rotation as R
 import random
+from pathlib import Path
+from typing import List, Dict
+
+import cv2
 import hydra
+import json
+import jsonlines
+import numpy as np
 from omegaconf import OmegaConf, DictConfig
+from scipy.spatial.transform import Rotation as R
 
 
 EXT_INFO = '.info.json'
@@ -275,12 +276,10 @@ def calculate_3d_bboxes_in_image(f_rgb: Path, f_info: Path, f_segments: Path, ca
         # TEST: SELECT PARTICULAR OBJ
         if TEST_OBJ_ID is not None and obj_id == TEST_OBJ_ID:
             print(f'Obj-{obj_id} Obj Transform Matrix:\n', obj_tranform_mat)
-            # print(f'Obj-{obj_id} Bbox World Coords:\n', obj_bbox_world.T)
 
     # Project each 3D bbox to the RGB image
     rgb = cv2.imread(str(f_rgb), cv2.IMREAD_COLOR)
     segments = cv2.imread(str(f_segments), cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
-    # for bbox_3d in list_obj_bboxes:
     for obj_id, bbox_3d in obj_bboxes.items():
         # TEST: SELECT PARTICULAR OBJ
         if TEST_OBJ_ID is not None and obj_id != TEST_OBJ_ID:
@@ -297,7 +296,7 @@ def calculate_3d_bboxes_in_image(f_rgb: Path, f_info: Path, f_segments: Path, ca
             obj_mask = obj_mask.astype(np.bool)
 
         # Get the world axis-aligned bbox (to compare and see we're getting sensible values)
-        print(f'Obj-{obj_id} Bbox world coords (after applying transformation to sku bbox):\n', bbox_3d.T)
+        print(f'\nObj-{obj_id} Bbox world coords (after applying transformation to sku bbox):\n', bbox_3d.T[:, :3])
         w_aligned_bbox_min = world_aligned_bbox[obj_id]["bbox_min"]
         w_aligned_bbox_max = world_aligned_bbox[obj_id]["bbox_max"]
         print(f'Obj-{obj_id} World Aligned Bbox:\n  Min: {w_aligned_bbox_min}\n  Max: {w_aligned_bbox_max}')
@@ -323,27 +322,25 @@ def calculate_3d_bboxes_in_image(f_rgb: Path, f_info: Path, f_segments: Path, ca
         # Generate random color
         rand_col = [random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)]
 
-        # Colorize the mask
+        # Visualize the mask of the object
         rand_col_muted = np.array([col / 3 for col in rand_col], dtype=np.uint16)
         rgb = rgb.astype(np.uint16)  # Cast to 16bit to prevent overflow
         rgb[obj_mask] += rand_col_muted
         rgb = rgb.clip(min=0, max=255).astype(np.uint8)
 
-        # Draw points on image
-        # for pt_px in bbox_px:
-        #     rgb = cv2.circle(rgb, tuple(pt_px), 1, rand_col, -1)
+        # Visualize the 3D bbox
         draw_3d_bbox(rgb, bbox_px, rand_col)
-
-        # Save output image
-        fname = f_rgb.parent / (render_id_rgb + EXT_VIZ_BBOX)
-        print(fname)
-        cv2.imwrite(str(fname), rgb)
-        print(f'\nSaved output image {fname}')
 
         if TEST_OBJ_ID is not None:
             # If testing enabled for single object, then quit after processing that obj
             print('Test mode - quitting')
             break
+
+    # Save output image
+    fname = f_rgb.parent / (render_id_rgb + EXT_VIZ_BBOX)
+    print(fname)
+    cv2.imwrite(str(fname), rgb)
+    print(f'\nSaved output image {fname}')
 
 
 @hydra.main(config_path='.', config_name='config')
