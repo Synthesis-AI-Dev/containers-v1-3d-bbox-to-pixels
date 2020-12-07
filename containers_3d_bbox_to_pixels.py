@@ -13,6 +13,7 @@ from omegaconf import OmegaConf, DictConfig
 from scipy.spatial.transform import Rotation as R
 
 
+log = logging.getLogger(__name__)
 EXT_INFO = '.info.json'
 EXT_RGB = '.rgb.png'
 EXT_SEGMENTS = '.segments.png'
@@ -147,18 +148,18 @@ def invert_4x4_transform(mat_transform: np.ndarray) -> np.ndarray:
     if mat_transform.shape != (4, 4):
         raise ValueError(f"The transform matrix must be of shape [4, 4]. Given: {mat_transform.shape}")
 
-    tx = mat_transform
+    tx = mat_transform.astype(np.float64)
     rx = tx[:3, :3]  # Rotation
     t = tx[:3, 3]  # Translation
 
     rx_inv = np.linalg.inv(rx)
     t_inv = -1 * (rx_inv @ t)
 
-    tx_inv = np.eye(4, dtype=np.float32)
+    tx_inv = np.eye(4, dtype=np.float64)
     tx_inv[:3, :3] = rx_inv
     tx_inv[:3, 3] = t_inv
 
-    return tx_inv
+    return tx_inv.astype(np.float32)
 
 
 def draw_3d_bbox(img: np.ndarray, bbox_px: np.ndarray, color: List) -> None:
@@ -228,15 +229,14 @@ def calculate_3d_bboxes_in_image(f_rgb: Path, f_info: Path, f_segments: Path, ca
     with f_info.open() as fd:
         info = json.load(fd)
 
-    # Read the camera extrinsics from the info.json
-    cam_extr = np.array(info["camera_transform"]).reshape((4, 4)).T
-    # TEST - invert cam transform
-    cam_extr = invert_4x4_transform(cam_extr)
-
-    print('\ncam_extr:\n', cam_extr)
-    cam_rot = cam_extr[:3, :3]
-    print('cam rotation (xyz, degrees): ', R.from_matrix(cam_rot).as_euler('xyz', degrees=True))
-    print(f'cam translation (xyz, meters): ', cam_extr[:3, 3].T)
+    # Get the camera extrinsics from the info.json
+    cam_extr_inv = np.array(info["camera_transform"]).reshape((4, 4)).T
+    cam_extr = invert_4x4_transform(cam_extr_inv)  # Transform in json is the inverse of extrinsics
+    cam_rot = R.from_matrix(cam_extr[:3, :3]).as_euler('xyz', degrees=True)
+    cam_trans = cam_extr[:3, 3].T
+    log.debug(f'cam_extr:\n{cam_extr}'
+              f'\ncam rotation (xyz, degrees): {cam_rot}'
+              f'\ncam translation (xyz, meters): {cam_trans}')
 
     # Get list of all objects and their pose from info.json
     list_objs = info["objects"]
@@ -244,7 +244,7 @@ def calculate_3d_bboxes_in_image(f_rgb: Path, f_info: Path, f_segments: Path, ca
     # Get the SKU ID and it's default 3D bbox
     sku_id = sku_ids[render_id_rgb]
     sku_bbox = get_sku_bbox_corners(sku_id)  # Shape: (8, 3) -> 8 corners of bbox
-    print('\nsku_bbox default (no rot or translation): \n', sku_bbox)
+    log.debug(f'sku_bbox default (no rot or translation): \n{sku_bbox}')
 
     # Get the rotated bbox for each obj in image
     obj_bboxes = dict()
@@ -275,7 +275,7 @@ def calculate_3d_bboxes_in_image(f_rgb: Path, f_info: Path, f_segments: Path, ca
 
         # TEST: SELECT PARTICULAR OBJ
         if TEST_OBJ_ID is not None and obj_id == TEST_OBJ_ID:
-            print(f'Obj-{obj_id} Obj Transform Matrix:\n', obj_tranform_mat)
+            log.debug(f'Obj-{obj_id} Obj Transform Matrix:\n{obj_tranform_mat}')
 
     # Project each 3D bbox to the RGB image
     rgb = cv2.imread(str(f_rgb), cv2.IMREAD_COLOR)
@@ -296,20 +296,21 @@ def calculate_3d_bboxes_in_image(f_rgb: Path, f_info: Path, f_segments: Path, ca
             obj_mask = obj_mask.astype(np.bool)
 
         # Get the world axis-aligned bbox (to compare and see we're getting sensible values)
-        print(f'\nObj-{obj_id} Bbox world coords (after applying transformation to sku bbox):\n', bbox_3d.T[:, :3])
+        log.debug('')
+        log.debug(f'Obj-{obj_id} Bbox world coords (after applying transformation to sku bbox):\n{bbox_3d.T[:, :3]}')
         w_aligned_bbox_min = world_aligned_bbox[obj_id]["bbox_min"]
         w_aligned_bbox_max = world_aligned_bbox[obj_id]["bbox_max"]
-        print(f'Obj-{obj_id} World Aligned Bbox:\n  Min: {w_aligned_bbox_min}\n  Max: {w_aligned_bbox_max}')
+        log.debug(f'Obj-{obj_id} World Aligned Bbox:\n  Min: {w_aligned_bbox_min}\n  Max: {w_aligned_bbox_max}')
 
         # Convert from world coords to camera coords
         bbox3d_cam_coords = cam_extr @ bbox_3d  # Shape: [4, 8]
         bbox3d_cam_coords = bbox3d_cam_coords[:3, :]  # Shape: [3, 8]
-        print(f'Obj-{obj_id} Bbox cam coords (X-right, Y-Up):\n', bbox3d_cam_coords.T)
+        log.debug(f'Obj-{obj_id} Bbox cam coords (X-right, Y-Up):\n{bbox3d_cam_coords.T}')
 
         # Rotation to convert (Y-up, X-right) camera to (Y-down, X-right) camera system for direct projection to pixels
         rot_x_180 = np.array([[1, 0, 0], [0, -1, 0], [0, 0, -1]])
         bbox3d_cam_coords = rot_x_180 @ bbox3d_cam_coords
-        print(f'Obj-{obj_id} Bbox rotated cam coords (X-right, Y-Down):\n', bbox3d_cam_coords.T)
+        log.debug(f'Obj-{obj_id} Bbox rotated cam coords (X-right, Y-Down):\n{bbox3d_cam_coords.T}')
 
         # Project to pixels
         bbox_px = cam_intr @ bbox3d_cam_coords
@@ -317,7 +318,7 @@ def calculate_3d_bboxes_in_image(f_rgb: Path, f_info: Path, f_segments: Path, ca
         bbox_px = bbox_px / bbox_px[:, 2, np.newaxis]  # Normalize
         bbox_px = bbox_px[:, :2]
         bbox_px = bbox_px.round().astype(np.int)
-        print(f'Obj-{obj_id} Bbox pixel coords:\n', bbox_px)
+        log.debug(f'Obj-{obj_id} Bbox pixel coords:\n{bbox_px}')
 
         # Generate random color
         rand_col = [random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)]
@@ -338,9 +339,8 @@ def calculate_3d_bboxes_in_image(f_rgb: Path, f_info: Path, f_segments: Path, ca
 
     # Save output image
     fname = f_rgb.parent / (render_id_rgb + EXT_VIZ_BBOX)
-    print(fname)
     cv2.imwrite(str(fname), rgb)
-    print(f'\nSaved output image {fname}')
+    log.info(f'Saved output image {fname}')
 
 
 @hydra.main(config_path='.', config_name='config')
@@ -377,12 +377,9 @@ def main(cfg: DictConfig):
     cam_intr = construct_camera_intrinsics(CAM_DATA["resolution"]["w"], CAM_DATA["resolution"]["h"],
                                            CAM_DATA["focal_len_mm"], CAM_DATA["field_of_view"]["x_axis_rads"],
                                            CAM_DATA["field_of_view"]["y_axis_rads"])
-
-    print('cam_intr:\n', cam_intr)
+    log.debug(f'cam_intr:\n{cam_intr}')
 
     calculate_3d_bboxes_in_image(files_rgb[0], files_info[0], files_segments[0], cam_intr, sku_ids)
-
-
 
 
 if __name__ == '__main__':
