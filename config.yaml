@@ -1,5 +1,6 @@
 dir_data: './sample_data/'
 threshold_visible_object: 1000  # Min number of pixels in an object's mask for it to be considered visible
+workers: 0  # Number of concurrent processes to use. 0 for using all available cores on machine.
 
 # Output filenames
 ext_viz_bbox: '.bbox.png'

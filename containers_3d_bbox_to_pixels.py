@@ -1,6 +1,9 @@
+import concurrent.futures
+import itertools
 import logging
 import math
 import random
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Dict
 
@@ -11,9 +14,19 @@ import jsonlines
 import numpy as np
 from omegaconf import OmegaConf, DictConfig
 from scipy.spatial.transform import Rotation as R
+from tqdm import tqdm
 
 
 log = logging.getLogger(__name__)
+
+
+@dataclass
+class BboxInfo:
+    obj_id: int  # The id of the object
+    obj_mask: np.ndarray  # Mask of the object
+    bbox_px: np.ndarray  # 3D bbox of object in pixel space. Shape: [8, 2], dtype=int
+    bbox_cam: np.ndarray  # 3D bbox of object in camera coords (Y-up, X-right). Shape: [8, 2], dtype=float32
+    bbox_world: np.ndarray  # 3D bbox of object in world coords (Y-up, X-right). Shape: [8, 2], dtype=float32
 
 # Data about the camera. Some of it is hardcoded and not available in metadata file
 CAM_DATA = {
@@ -202,25 +215,22 @@ def get_sku_bbox_corners(sku_id: int):
     return sku_bbox[sku_id]
 
 
-def calculate_3d_bboxes_in_image(f_rgb: Path, f_info: Path, f_segments: Path, cam_intr: np.ndarray, sku_ids: Dict,
-                                 threshold_visible_object: int, output_viz_ext: str = '.bbox.png'):
-    """Calc the 3D bboxes of all objs in an img
+def calculate_3d_bboxes_in_image(f_info: Path, f_segments: Path, cam_intr: np.ndarray, sku_ids: Dict,
+                                 threshold_visible_object: int) -> List[BboxInfo]:
+    """Calc the 3D bboxes of all visible objs in an img.
+    Object is determined to be visible based on the number of pixels in its mask.
 
     Args:
-        f_rgb: Filename of rgb image
         f_info: Filename of info.json. It contains the position and orientation of all the objects in scene.
         f_segments: Filename of the segments image (contains mask of each object).
         cam_intr: Camera Intrinsics Matrix
         sku_ids: Mapping between render ids and sku id. All objects in each render are the same SKU.
         threshold_visible_object: Min number of pixels in an object's mask for it to be considered visible
-        output_viz_ext: Extension of the output filename. If none, no file will be saved. Example: '.bbox.png'
-    """
-    render_id_rgb = get_renderid(f_rgb)
-    render_id_info = get_renderid(f_info)
-    if render_id_rgb != render_id_info:
-        raise ValueError(f"The RGB file ({f_rgb.name}) and Info file ({f_info.name}) do not match."
-                         f" They are of different render IDs.")
 
+    Returns:
+        list[BboxInfo]: List of all "visible" objects' bounding box information and mask.
+    """
+    render_id_info = get_renderid(f_info)
     with f_info.open() as fd:
         info = json.load(fd)
 
@@ -237,7 +247,7 @@ def calculate_3d_bboxes_in_image(f_rgb: Path, f_info: Path, f_segments: Path, ca
     list_objs = info["objects"]
 
     # Get the SKU ID and it's default 3D bbox
-    sku_id = sku_ids[render_id_rgb]
+    sku_id = sku_ids[render_id_info]
     sku_bbox = get_sku_bbox_corners(sku_id)  # Shape: (8, 3) -> 8 corners of bbox
     log.debug(f'sku_bbox default (no rot or translation): \n{sku_bbox}')
 
@@ -268,9 +278,9 @@ def calculate_3d_bboxes_in_image(f_rgb: Path, f_info: Path, f_segments: Path, ca
             "bbox_max": obj_info["bbox_max"],
         }
 
-    # Project each 3D bbox to the RGB image
-    rgb = cv2.imread(str(f_rgb), cv2.IMREAD_COLOR)
+    # Get all 3D bboxes in pixel and camera coordinates
     segments = cv2.imread(str(f_segments), cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
+    visible_bboxes = []  # List of dicts of visible bboxes
     for obj_id, bbox_3d in obj_bboxes.items():
         # Skip if object is not visible
         obj_mask = (segments == obj_id).astype(np.uint8)  # Get mask of obj
@@ -307,26 +317,61 @@ def calculate_3d_bboxes_in_image(f_rgb: Path, f_info: Path, f_segments: Path, ca
         bbox_px = bbox_px.round().astype(np.int)
         log.debug(f'Obj-{obj_id} Bbox pixel coords:\n{bbox_px}')
 
+        bbox_info = BboxInfo(obj_id=obj_id, obj_mask=obj_mask, bbox_px=bbox_px, bbox_cam=bbox3d_cam_coords,
+                             bbox_world=bbox_3d)
+        visible_bboxes.append(bbox_info)
+
+    return visible_bboxes
+
+
+def _process_file(f_rgb: Path, f_info: Path, f_segments: Path, cam_intr: np.ndarray, sku_ids: Dict,
+                  threshold_visible_object: int, output_viz_ext: str = '.bbox.png'):
+    """Calc the 3D bboxes of all visible objs in an img and overlay the bboxes on the rgb image
+
+        Args:
+            f_rgb: Filename of rgb image
+            f_info: Filename of info.json. It contains the position and orientation of all the objects in scene.
+            f_segments: Filename of the segments image (contains mask of each object).
+            cam_intr: Camera Intrinsics Matrix
+            sku_ids: Mapping between render ids and sku id. All objects in each render are the same SKU.
+            threshold_visible_object: Min number of pixels in an object's mask for it to be considered visible
+            output_viz_ext: Extension of the output filename. If none, no file will be saved. Example: '.bbox.png'
+    """
+    render_id_rgb = get_renderid(f_rgb)
+    render_id_info = get_renderid(f_info)
+    if render_id_rgb != render_id_info:
+        raise ValueError(f"The RGB file ({f_rgb.name}) and Info file ({f_info.name}) do not match."
+                         f" They are of different render IDs.")
+
+    # Get bboxes of all the visible objects in the image
+    bbox_infos = calculate_3d_bboxes_in_image(f_info, f_segments, cam_intr, sku_ids,
+                                              threshold_visible_object)
+
+    # Visualize the bboxes on RGB image
+    rgb = cv2.imread(str(f_rgb), cv2.IMREAD_COLOR)
+    for bbox_info in bbox_infos:
         # Generate random color
         rand_col = [random.randint(0, 255), random.randint(0, 255), random.randint(0, 255)]
 
         # Visualize the mask of the object
         rand_col_muted = np.array([col / 3 for col in rand_col], dtype=np.uint16)
         rgb = rgb.astype(np.uint16)  # Cast to 16bit to prevent overflow
-        rgb[obj_mask] += rand_col_muted
+        rgb[bbox_info.obj_mask] += rand_col_muted
         rgb = rgb.clip(min=0, max=255).astype(np.uint8)
 
         # Visualize the 3D bbox
-        draw_3d_bbox(rgb, bbox_px, rand_col)
+        draw_3d_bbox(rgb, bbox_info.bbox_px, rand_col)
 
     # Save output image
     fname = f_rgb.parent / (render_id_rgb + output_viz_ext)
     cv2.imwrite(str(fname), rgb)
-    log.info(f'Saved output image {fname}')
+    # log.info(f'Saved output image {fname}')
 
 
 @hydra.main(config_path='.', config_name='config')
 def main(cfg: DictConfig):
+    log.info(f"Input Config: \n{OmegaConf.to_yaml(cfg)}")
+
     # Parse config
     dir_data = Path(cfg.dir_data)
     if not dir_data.is_dir():
@@ -338,6 +383,10 @@ def main(cfg: DictConfig):
     ext_segments = cfg.ext_segments
     fname_metadata = cfg.fname_metadata
     seed = int(cfg.seed)
+    if int(cfg.workers) > 0:
+        max_workers = int(cfg.workers)
+    else:
+        max_workers = None
 
     random.seed(seed)
 
@@ -368,8 +417,13 @@ def main(cfg: DictConfig):
                                            CAM_DATA["field_of_view"]["y_axis_rads"])
     log.debug(f'cam_intr:\n{cam_intr}')
 
-    calculate_3d_bboxes_in_image(files_rgb[0], files_info[0], files_segments[0], cam_intr, sku_ids,
-                                 threshold_visible_object, ext_viz_bbox)
+    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+        with tqdm(total=num_rgb) as pbar:
+            for _ in executor.map(_process_file, files_rgb, files_info, files_segments, itertools.repeat(cam_intr),
+                                  itertools.repeat(sku_ids), itertools.repeat(threshold_visible_object),
+                                  itertools.repeat(ext_viz_bbox)):
+                # Catch any error raised in processes
+                pbar.update()
 
 
 if __name__ == '__main__':

@@ -1,6 +1,8 @@
 # containers-v1-3d-bbox-to-pixels
 Containers v1 - Get the 3D bboxes of items in renders and project them to pixel space
 
+![](sample_data/5.bbox.png)
+
 There are 3 unique SKUs. Each render contains objects of the same SKU, with different 
 color schemes. The bounding box of each SKU at zero rotation/translation is hard-coded.
 Based on the pose of each object in the info file, we calculate the axis-aligned 
@@ -13,7 +15,6 @@ However, some information is missing. This data is hard-coded within the script:
 
 10 Sample images are included in the repo.
 
-![](sample_data/0.rgb.png)
 
 ## Usage
 
