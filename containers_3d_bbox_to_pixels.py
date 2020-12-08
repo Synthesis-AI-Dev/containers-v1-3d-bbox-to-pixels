@@ -1,5 +1,6 @@
 import concurrent.futures
 import itertools
+import json
 import logging
 import math
 import random
@@ -9,7 +10,6 @@ from typing import List, Dict
 
 import cv2
 import hydra
-import json
 import jsonlines
 import numpy as np
 from omegaconf import OmegaConf, DictConfig
