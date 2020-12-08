@@ -20,7 +20,6 @@ EXT_SEGMENTS = '.segments.png'
 EXT_VIZ_BBOX = '.bbox.png'
 FNAME_METADATA = 'metadata.jsonl'
 SEED = 0
-TEST_OBJ_ID = None #192  # If not none, will only process this one obj in image, for debugging purposes. Obj 192 for renderid 0 is on top of pile.
 
 # Data about the camera. Some of it is hardcoded and not available in metadata file
 CAM_DATA = {
@@ -274,18 +273,10 @@ def calculate_3d_bboxes_in_image(f_rgb: Path, f_info: Path, f_segments: Path, ca
             "bbox_max": obj_info["bbox_max"],
         }
 
-        # TEST: SELECT PARTICULAR OBJ
-        if TEST_OBJ_ID is not None and obj_id == TEST_OBJ_ID:
-            log.debug(f'Obj-{obj_id} Obj Transform Matrix:\n{obj_tranform_mat}')
-
     # Project each 3D bbox to the RGB image
     rgb = cv2.imread(str(f_rgb), cv2.IMREAD_COLOR)
     segments = cv2.imread(str(f_segments), cv2.IMREAD_UNCHANGED | cv2.IMREAD_ANYDEPTH)
     for obj_id, bbox_3d in obj_bboxes.items():
-        # TEST: SELECT PARTICULAR OBJ
-        if TEST_OBJ_ID is not None and obj_id != TEST_OBJ_ID:
-            continue
-
         # Skip if object is not visible
         obj_mask = (segments == obj_id).astype(np.uint8)  # Get mask of obj
         obj_mask = cv2.erode(obj_mask, np.ones((3, 3), np.uint8), iterations=1)  # Remove noise in mask
@@ -332,11 +323,6 @@ def calculate_3d_bboxes_in_image(f_rgb: Path, f_info: Path, f_segments: Path, ca
 
         # Visualize the 3D bbox
         draw_3d_bbox(rgb, bbox_px, rand_col)
-
-        if TEST_OBJ_ID is not None:
-            # If testing enabled for single object, then quit after processing that obj
-            print('Test mode - quitting')
-            break
 
     # Save output image
     fname = f_rgb.parent / (render_id_rgb + EXT_VIZ_BBOX)
