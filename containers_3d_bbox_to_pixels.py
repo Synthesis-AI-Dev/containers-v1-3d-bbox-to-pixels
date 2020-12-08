@@ -21,7 +21,6 @@ EXT_VIZ_BBOX = '.bbox.png'
 FNAME_METADATA = 'metadata.jsonl'
 SEED = 0
 TEST_OBJ_ID = None #192  # If not none, will only process this one obj in image, for debugging purposes. Obj 192 for renderid 0 is on top of pile.
-THRESHOLD_MIN_PX_VISIBLE_OBJECT = 1000  # The minimum number of pixels in a mask for the object to be considered "visible"
 
 # Data about the camera. Some of it is hardcoded and not available in metadata file
 CAM_DATA = {
@@ -210,7 +209,8 @@ def get_sku_bbox_corners(sku_id: int):
     return sku_bbox[sku_id]
 
 
-def calculate_3d_bboxes_in_image(f_rgb: Path, f_info: Path, f_segments: Path, cam_intr: np.ndarray, sku_ids: Dict):
+def calculate_3d_bboxes_in_image(f_rgb: Path, f_info: Path, f_segments: Path, cam_intr: np.ndarray, sku_ids: Dict,
+                                 threshold_visible_object: int):
     """Calc the 3D bboxes of all objs in an img
 
     Args:
@@ -219,6 +219,7 @@ def calculate_3d_bboxes_in_image(f_rgb: Path, f_info: Path, f_segments: Path, ca
         f_segments: Filename of the segments image (contains mask of each object).
         cam_intr: Camera Intrinsics Matrix
         sku_ids: Mapping between render ids and sku id. All objects in each render are the same SKU.
+        threshold_visible_object: Min number of pixels in an object's mask for it to be considered visible
     """
     render_id_rgb = get_renderid(f_rgb)
     render_id_info = get_renderid(f_info)
@@ -289,7 +290,7 @@ def calculate_3d_bboxes_in_image(f_rgb: Path, f_info: Path, f_segments: Path, ca
         obj_mask = (segments == obj_id).astype(np.uint8)  # Get mask of obj
         obj_mask = cv2.erode(obj_mask, np.ones((3, 3), np.uint8), iterations=1)  # Remove noise in mask
         obj_mask = cv2.dilate(obj_mask, np.ones((3, 3), np.uint8), iterations=1)  # Restore size of obj's mask
-        if np.count_nonzero(obj_mask) < THRESHOLD_MIN_PX_VISIBLE_OBJECT:
+        if np.count_nonzero(obj_mask) < threshold_visible_object:
             # If mask is empty, skip this object
             continue
         else:
@@ -348,9 +349,11 @@ def main(cfg: DictConfig):
     # Seed random
     random.seed(SEED)
 
+    # Parse config
     dir_data = Path(cfg.dir_data)
     if not dir_data.is_dir():
         raise ValueError(f'Not a directory: {dir_data}')
+    threshold_visible_object = int(cfg.threshold_visible_object)
 
     # Get all renders
     files_rgb, num_rgb = get_files_in_dir(dir_data, EXT_RGB)
@@ -379,7 +382,8 @@ def main(cfg: DictConfig):
                                            CAM_DATA["field_of_view"]["y_axis_rads"])
     log.debug(f'cam_intr:\n{cam_intr}')
 
-    calculate_3d_bboxes_in_image(files_rgb[0], files_info[0], files_segments[0], cam_intr, sku_ids)
+    calculate_3d_bboxes_in_image(files_rgb[0], files_info[0], files_segments[0], cam_intr, sku_ids,
+                                 threshold_visible_object)
 
 
 if __name__ == '__main__':

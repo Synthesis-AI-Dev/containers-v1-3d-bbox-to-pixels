@@ -17,8 +17,29 @@ However, some information is missing. This data is hard-coded within the script:
 
 ## Usage
 
+The script uses hydra for config files. Pass the root data directory containing the data to be
+processed as shown below. All the files (rgb, info json, metadata) must be present directly  
+in the root data directory
 ```shell script
 python containers_3d_bbox_to_pixels.py dir_data=sample_data/
+```
+
+
+There is a threshold to filter out objects that are not visible in the image, based
+on the number of pixels in an objects mask. Lowering this number will increase the
+sensitivity and show more objects that are only partially visible:
+
+```shell script
+python containers_3d_bbox_to_pixels.py threshold_visible_object=1000
+```
+
+
+To enable debug information, pass the argument `hydra.verbose=true`. 
+Debug will print a lot of information -> details of the transforms of 
+every "visible" object in every image.
+
+```shell script
+python containers_3d_bbox_to_pixels.py hydra.verbose=true
 ```
 
 ## Install
