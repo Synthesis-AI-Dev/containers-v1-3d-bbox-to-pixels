@@ -14,12 +14,6 @@ from scipy.spatial.transform import Rotation as R
 
 
 log = logging.getLogger(__name__)
-EXT_INFO = '.info.json'
-EXT_RGB = '.rgb.png'
-EXT_SEGMENTS = '.segments.png'
-EXT_VIZ_BBOX = '.bbox.png'
-FNAME_METADATA = 'metadata.jsonl'
-SEED = 0
 
 # Data about the camera. Some of it is hardcoded and not available in metadata file
 CAM_DATA = {
@@ -209,7 +203,7 @@ def get_sku_bbox_corners(sku_id: int):
 
 
 def calculate_3d_bboxes_in_image(f_rgb: Path, f_info: Path, f_segments: Path, cam_intr: np.ndarray, sku_ids: Dict,
-                                 threshold_visible_object: int):
+                                 threshold_visible_object: int, output_viz_ext: str = '.bbox.png'):
     """Calc the 3D bboxes of all objs in an img
 
     Args:
@@ -219,6 +213,7 @@ def calculate_3d_bboxes_in_image(f_rgb: Path, f_info: Path, f_segments: Path, ca
         cam_intr: Camera Intrinsics Matrix
         sku_ids: Mapping between render ids and sku id. All objects in each render are the same SKU.
         threshold_visible_object: Min number of pixels in an object's mask for it to be considered visible
+        output_viz_ext: Extension of the output filename. If none, no file will be saved. Example: '.bbox.png'
     """
     render_id_rgb = get_renderid(f_rgb)
     render_id_info = get_renderid(f_info)
@@ -325,31 +320,36 @@ def calculate_3d_bboxes_in_image(f_rgb: Path, f_info: Path, f_segments: Path, ca
         draw_3d_bbox(rgb, bbox_px, rand_col)
 
     # Save output image
-    fname = f_rgb.parent / (render_id_rgb + EXT_VIZ_BBOX)
+    fname = f_rgb.parent / (render_id_rgb + output_viz_ext)
     cv2.imwrite(str(fname), rgb)
     log.info(f'Saved output image {fname}')
 
 
 @hydra.main(config_path='.', config_name='config')
 def main(cfg: DictConfig):
-    # Seed random
-    random.seed(SEED)
-
     # Parse config
     dir_data = Path(cfg.dir_data)
     if not dir_data.is_dir():
         raise ValueError(f'Not a directory: {dir_data}')
     threshold_visible_object = int(cfg.threshold_visible_object)
+    ext_viz_bbox = cfg.ext_viz_bbox
+    ext_info = cfg.ext_info
+    ext_rgb = cfg.ext_rgb
+    ext_segments = cfg.ext_segments
+    fname_metadata = cfg.fname_metadata
+    seed = int(cfg.seed)
+
+    random.seed(seed)
 
     # Get all renders
-    files_rgb, num_rgb = get_files_in_dir(dir_data, EXT_RGB)
-    files_info, num_info = get_files_in_dir(dir_data, EXT_INFO)
-    files_segments, num_segments = get_files_in_dir(dir_data, EXT_SEGMENTS)
+    files_rgb, num_rgb = get_files_in_dir(dir_data, ext_rgb)
+    files_info, num_info = get_files_in_dir(dir_data, ext_info)
+    files_segments, num_segments = get_files_in_dir(dir_data, ext_segments)
     if num_rgb != num_info:
         raise ValueError(f"Unequal num of rgb ({num_rgb}) and info ({num_info}) files in dir '{dir_data}'")
 
     # Read Metadata -> Get SKU ID for each Render and camera information (resolution and focal len)
-    f_metadata = dir_data / FNAME_METADATA
+    f_metadata = dir_data / fname_metadata
     # There are 3 unique SKUs (type of geometry). ALL OBJECTS IN EACH RENDER ARE THE SAME SKU
     sku_ids = dict()  # Key =  Render ID, Value = SKU ID
     with jsonlines.open(f_metadata) as reader:
@@ -369,7 +369,7 @@ def main(cfg: DictConfig):
     log.debug(f'cam_intr:\n{cam_intr}')
 
     calculate_3d_bboxes_in_image(files_rgb[0], files_info[0], files_segments[0], cam_intr, sku_ids,
-                                 threshold_visible_object)
+                                 threshold_visible_object, ext_viz_bbox)
 
 
 if __name__ == '__main__':

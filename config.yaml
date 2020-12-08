@@ -1,10 +1,21 @@
 dir_data: './sample_data/'
+threshold_visible_object: 1000  # Min number of pixels in an object's mask for it to be considered visible
+
+# Output filenames
+ext_viz_bbox: '.bbox.png'
+# Input filenames
+ext_info: '.info.json'
+ext_rgb: '.rgb.png'
+ext_segments: '.segments.png'
+fname_metadata: 'metadata.jsonl'
+seed: 0
 
 # Hydra specific params.
 hydra:
     output_subdir: null  # Disable saving of config files.
     run:
         dir: .  # Set working dir to current directory
+    verbose: false  # Set to true to enable DEBUG level for logging. WARNING: Prints info of every object in every image
 
 defaults:
     # Disable log files
